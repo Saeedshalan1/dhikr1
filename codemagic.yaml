@@ -4,34 +4,68 @@ workflows:
     max_build_duration: 60
     instance_type: mac_mini_m2
     environment:
-      flutter: stable
+      node: 22
+      java: 21
     scripts:
-      - name: 1 create
+      - name: 1 check
         script: |
-          echo "== ملفات المستودع =="
           ls -la
-          ls -la lib || true
-          head -3 lib/main.dart || true
-          if ! grep -q "TapFeedback" lib/main.dart 2>/dev/null; then
-            echo "ERROR: lib/main.dart في المستودع ليس ملف تطبيق ذكر (أو غير موجود)"
+          ls -la www || true
+          if ! grep -q "dhikr-app-v1" www/index.html 2>/dev/null; then
+            echo "ERROR: الملف www/index.html غير موجود أو ليس ملف تطبيق ذكر"
             exit 1
           fi
-          cp lib/main.dart /tmp/dhikr_main.dart
-          cp pubspec.yaml /tmp/dhikr_pubspec.yaml
-          flutter create . --org com.swalaf --project-name dhikr --platforms android,ios
-          cp /tmp/dhikr_main.dart lib/main.dart
-          cp /tmp/dhikr_pubspec.yaml pubspec.yaml
-          rm -f test/widget_test.dart
-          head -3 lib/main.dart
-      - name: 2 assets
+      - name: 2 project files
+        script: |
+          cat > package.json <<'JSON'
+          {
+            "name": "dhikr",
+            "version": "1.0.0",
+            "private": true,
+            "dependencies": {
+              "@capacitor/android": "8.6.2",
+              "@capacitor/core": "8.6.2",
+              "@capacitor/haptics": "8.0.2",
+              "@capacitor/local-notifications": "8.3.1"
+            },
+            "devDependencies": {
+              "@capacitor/assets": "4.0.0",
+              "@capacitor/cli": "8.6.2"
+            }
+          }
+          JSON
+          cat > capacitor.config.json <<'JSON'
+          {
+            "appId": "com.swalaf.dhikr",
+            "appName": "ذِكْر",
+            "webDir": "www",
+            "android": {
+              "backgroundColor": "#03140F"
+            },
+            "plugins": {
+              "LocalNotifications": {
+                "smallIcon": "ic_stat_dhikr",
+                "iconColor": "#10B981"
+              },
+              "SystemBars": {
+                "insetsHandling": "css"
+              }
+            }
+          }
+          JSON
+          cat package.json capacitor.config.json
+      - name: 3 npm install
+        script: npm install
+      - name: 4 android
+        script: npx cap add android
+      - name: 5 icons and fonts
         script: |
           python3 - <<'PY'
           # يولّد أيقونات التطبيق وأصواته بدون أي مكتبات خارجية.
           # التشغيل: python3 tool/make_assets.py
           import math, os, struct, wave, zlib
 
-          os.makedirs('assets/icon', exist_ok=True)
-          os.makedirs('assets/sounds', exist_ok=True)
+          os.makedirs('assets', exist_ok=True)
 
           # ---------------- PNG ----------------
           def write_png(path, w, h, pixels):
@@ -96,10 +130,16 @@ workflows:
                       px[o:o + 4] = bytes([int(min(255, max(0, v))) for v in col] + [int(a * 255)])
               return px
 
-          S = 512
-          write_png('assets/icon/icon.png', S, S, render(S))
-          write_png('assets/icon/foreground.png', S, S, render(S, 0.75, False))
-          write_png('assets/icon/splash.png', S, S, render(S, 1.0, False))
+
+          S = 1024
+          write_png('assets/icon-only.png', S, S, render(S))
+          write_png('assets/icon-foreground.png', S, S, render(S, 0.62, False))
+          bg = bytearray(S * S * 4)
+          for i in range(S * S):
+              bg[i*4:i*4+4] = bytes([3, 20, 15, 255])
+          write_png('assets/icon-background.png', S, S, bg)
+          write_png('assets/splash.png', S, S, render(S, 0.55, True))
+          write_png('assets/splash-dark.png', S, S, render(S, 0.55, True))
 
           # أيقونة الإشعار (أبيض على شفاف)
           N = 96
@@ -109,94 +149,25 @@ workflows:
                   d = math.hypot(x - 47.5, y - 47.5)
                   a = max(smooth(34, d) - smooth(26, d), smooth(10, d))
                   px[(y * N + x) * 4:(y * N + x) * 4 + 4] = bytes([255, 255, 255, int(a * 255)])
-          write_png('assets/icon/notification.png', N, N, px)
-
-          # ---------------- WAV ----------------
-          SR = 44100
-          def bell(f, dur, decay):
-              out = []
-              for i in range(int(SR * dur)):
-                  t = i / SR
-                  v = (math.sin(2 * math.pi * f * t) + 0.35 * math.sin(2 * math.pi * f * 2.01 * t)
-                       + 0.12 * math.sin(2 * math.pi * f * 3.02 * t)) * math.exp(-t * decay)
-                  if t < 0.006:
-                      v *= t / 0.006
-                  out.append(v)
-              return out
-
-          def save(path, sig):
-              m = max(abs(v) for v in sig) or 1
-              w = wave.open(path, 'wb')
-              w.setnchannels(1); w.setsampwidth(2); w.setframerate(SR)
-              w.writeframes(b''.join(struct.pack('<h', int(v / m * 0.6 * 32767)) for v in sig))
-              w.close()
-
-          save('assets/sounds/tap.wav', bell(880, 0.45, 9))
-          chime = [0.0] * int(SR * 2.2)
-          for i, f in enumerate([523.25, 659.25, 783.99, 1046.5]):
-              b = bell(f, 1.6, 3.2)
-              st = int(SR * 0.16 * i)
-              for j, v in enumerate(b):
-                  if st + j < len(chime):
-                      chime[st + j] += v
-          save('assets/sounds/goal.wav', chime)
+          os.makedirs('android/app/src/main/res/drawable', exist_ok=True)
+          write_png('android/app/src/main/res/drawable/ic_stat_dhikr.png', N, N, px)
           print('assets ready')
           PY
-          mkdir -p assets/fonts
+          mkdir -p www/fonts
           F=https://raw.githubusercontent.com/google/fonts/main/ofl
-          curl -fsSL $F/amiri/Amiri-Regular.ttf -o assets/fonts/Amiri-Regular.ttf
-          curl -fsSL $F/amiri/Amiri-Bold.ttf -o assets/fonts/Amiri-Bold.ttf
+          curl -fsSL $F/amiri/Amiri-Regular.ttf -o www/fonts/Amiri-Regular.ttf
+          curl -fsSL $F/amiri/Amiri-Bold.ttf -o www/fonts/Amiri-Bold.ttf
           for w in Regular Medium Bold ExtraBold; do
-            curl -fsSL $F/tajawal/Tajawal-$w.ttf -o assets/fonts/Tajawal-$w.ttf
+            curl -fsSL $F/tajawal/Tajawal-$w.ttf -o www/fonts/Tajawal-$w.ttf
           done
-          ls -R assets
-      - name: 3 pub get
-        script: flutter pub get
-      - name: 4 setup
-        script: |
-          python3 - <<'PY'
-          import os, re, shutil
-          m = 'android/app/src/main/AndroidManifest.xml'
-          s = open(m, encoding='utf-8').read()
-          for p in ['POST_NOTIFICATIONS', 'RECEIVE_BOOT_COMPLETED', 'VIBRATE']:
-              if p not in s:
-                  s = s.replace('<application', '<uses-permission android:name="android.permission.%s"/>\n    <application' % p, 1)
-          if 'ScheduledNotificationReceiver' not in s:
-              r = ('<receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" />\n'
-                   '        <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">\n'
-                   '            <intent-filter>\n'
-                   '                <action android:name="android.intent.action.BOOT_COMPLETED"/>\n'
-                   '                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>\n'
-                   '            </intent-filter>\n'
-                   '        </receiver>\n    </application>')
-              s = s.replace('</application>', r, 1)
-          s = re.sub(r'android:label="[^"]*"', 'android:label="ذِكْر"', s, count=1)
-          open(m, 'w', encoding='utf-8').write(s)
-          os.makedirs('android/app/src/main/res/drawable', exist_ok=True)
-          if os.path.exists('assets/icon/notification.png'):
-              shutil.copy('assets/icon/notification.png', 'android/app/src/main/res/drawable/ic_notification.png')
-          kts, gr = 'android/app/build.gradle.kts', 'android/app/build.gradle'
-          if os.path.exists(kts):
-              g = open(kts).read()
-              if 'isCoreLibraryDesugaringEnabled' not in g:
-                  g = g.replace('compileOptions {', 'compileOptions {\n        isCoreLibraryDesugaringEnabled = true', 1)
-              if 'desugar_jdk_libs' not in g:
-                  g += '\ndependencies {\n    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")\n}\n'
-              open(kts, 'w').write(g)
-          else:
-              g = open(gr).read()
-              if 'coreLibraryDesugaringEnabled' not in g:
-                  g = g.replace('compileOptions {', 'compileOptions {\n        coreLibraryDesugaringEnabled true', 1)
-              if 'desugar_jdk_libs' not in g:
-                  g += "\ndependencies {\n    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'\n}\n"
-              open(gr, 'w').write(g)
-          print('setup done')
-          PY
-      - name: 5 icons
-        script: dart run flutter_launcher_icons
-      - name: 6 splash
-        script: dart run flutter_native_splash:create
+          npx @capacitor/assets generate --android --iconBackgroundColor '#03140F' --iconBackgroundColorDark '#03140F' --splashBackgroundColor '#03140F' --splashBackgroundColorDark '#03140F'
+          ls www/fonts android/app/src/main/res/drawable
+      - name: 6 sync
+        script: npx cap sync android
       - name: 7 build apk
-        script: flutter build apk --release
+        script: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
     artifacts:
-      - build/app/outputs/flutter-apk/*.apk
+      - android/app/build/outputs/apk/debug/*.apk
