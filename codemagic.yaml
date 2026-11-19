@@ -8,8 +8,21 @@ workflows:
     scripts:
       - name: 1 create
         script: |
+          echo "== ملفات المستودع =="
+          ls -la
+          ls -la lib || true
+          head -3 lib/main.dart || true
+          if ! grep -q "TapFeedback" lib/main.dart 2>/dev/null; then
+            echo "ERROR: lib/main.dart في المستودع ليس ملف تطبيق ذكر (أو غير موجود)"
+            exit 1
+          fi
+          cp lib/main.dart /tmp/dhikr_main.dart
+          cp pubspec.yaml /tmp/dhikr_pubspec.yaml
           flutter create . --org com.swalaf --project-name dhikr --platforms android,ios
+          cp /tmp/dhikr_main.dart lib/main.dart
+          cp /tmp/dhikr_pubspec.yaml pubspec.yaml
           rm -f test/widget_test.dart
+          head -3 lib/main.dart
       - name: 2 assets
         script: |
           python3 - <<'PY'
