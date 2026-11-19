@@ -20,11 +20,47 @@ workflows:
           for w in Regular Medium Bold ExtraBold; do
             curl -fsSL $F/tajawal/Tajawal-$w.ttf -o assets/fonts/Tajawal-$w.ttf
           done
-          ls -R assets
       - name: 3 pub get
         script: flutter pub get
       - name: 4 setup
-        script: dart run tool/setup.dart
+        script: |
+          python3 - <<'PY'
+          import os, re, shutil
+          m = 'android/app/src/main/AndroidManifest.xml'
+          s = open(m, encoding='utf-8').read()
+          for p in ['POST_NOTIFICATIONS', 'RECEIVE_BOOT_COMPLETED', 'VIBRATE']:
+              if p not in s:
+                  s = s.replace('<application', '<uses-permission android:name="android.permission.%s"/>\n    <application' % p, 1)
+          if 'ScheduledNotificationReceiver' not in s:
+              r = ('<receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" />\n'
+                   '        <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">\n'
+                   '            <intent-filter>\n'
+                   '                <action android:name="android.intent.action.BOOT_COMPLETED"/>\n'
+                   '                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>\n'
+                   '            </intent-filter>\n'
+                   '        </receiver>\n    </application>')
+              s = s.replace('</application>', r, 1)
+          s = re.sub(r'android:label="[^"]*"', 'android:label="ذِكْر"', s, count=1)
+          open(m, 'w', encoding='utf-8').write(s)
+          os.makedirs('android/app/src/main/res/drawable', exist_ok=True)
+          shutil.copy('assets/icon/notification.png', 'android/app/src/main/res/drawable/ic_notification.png')
+          kts, gr = 'android/app/build.gradle.kts', 'android/app/build.gradle'
+          if os.path.exists(kts):
+              g = open(kts).read()
+              if 'isCoreLibraryDesugaringEnabled' not in g:
+                  g = g.replace('compileOptions {', 'compileOptions {\n        isCoreLibraryDesugaringEnabled = true', 1)
+              if 'desugar_jdk_libs' not in g:
+                  g += '\ndependencies {\n    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")\n}\n'
+              open(kts, 'w').write(g)
+          else:
+              g = open(gr).read()
+              if 'coreLibraryDesugaringEnabled' not in g:
+                  g = g.replace('compileOptions {', 'compileOptions {\n        coreLibraryDesugaringEnabled true', 1)
+              if 'desugar_jdk_libs' not in g:
+                  g += "\ndependencies {\n    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'\n}\n"
+              open(gr, 'w').write(g)
+          print('setup done')
+          PY
       - name: 5 icons
         script: dart run flutter_launcher_icons
       - name: 6 splash
